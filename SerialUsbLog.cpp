@@ -60,6 +60,7 @@
 #include "EXNetworkPreferences.html.h"
 #include "Roster.h"
 #include "Roster.html.h"
+#include "Throttle.html.h"
 #include "SystemPreferences.h"
 
 
@@ -379,6 +380,8 @@ void SerialUsbLog::loop() {
     #ifdef MOTOR_SHIELD_TYPE
     // MAYBE new LogPage("/DCCACK.html",DCCACK_html,"DCC ACK Preferences");
     new LogPage("/Roster.html",Roster_html,"Roster Editor");
+    new LogPage("/throttle",Throttle_html); // a whole page, so not a config menu item
+    new LogPage("/ThrottleMenu.html",ThrottleMenu_html,"Throttle");
     #endif
     // user pages may be added later with exrail
     started = true;
