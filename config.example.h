@@ -283,6 +283,18 @@ The configuration file for DCC-EX Command Station
 //#define RAILCOM_GATE_CH2 18
 //#define RAILCOM_GATE_ACTIVE_LOW
 
+// On ESP32 you can read raw RailCom bytes from a detector whose serial
+// output goes to a GPIO: Channel 1 into UART2, Channel 2 into UART1.
+// The bytes of each cutout are kept with the packet the cutout followed
+// and read back with <J RC n>. The define is the GPIO; either channel
+// may be used alone. The RX line is inverted unless RAILCOM_UART_INVERT
+// is 0. UART2 is also Serial2 (SERIAL2_COMMANDS, SABERTOOTH). GPIO 36
+// and 39 (A0, A1 on EX-CSB1) carry a short low pulse when an ADC is
+// powered up (ESP32 errata 3.11); watch for framing-error flags.
+//#define RAILCOM_UART_CH1 39
+//#define RAILCOM_UART_CH2 36
+//#define RAILCOM_UART_INVERT 0
+
 // ESP32 LED Wifi Indicator
 // GPIO 2 on ESPduino32
 //#define WIFI_LED 2

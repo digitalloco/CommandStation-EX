@@ -117,6 +117,7 @@ Once a new OPCODE is decided upon, update this list.
 #include "version.h"
 #include "KeywordHasher.h"
 #include "CamParser.h"
+#include "RailcomUart.h"
 #include "Stash.h"
 #include "DCCEXParserMacros.h"
 #include "DCCConsist.h"

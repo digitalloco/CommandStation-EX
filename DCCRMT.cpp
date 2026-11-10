@@ -43,6 +43,7 @@
 #include "DCCWaveform.h" // for MAX_PACKET_SIZE
 #include "soc/gpio_sig_map.h"
 #include "Railcom.h"
+#include "RailcomUart.h"
 
 // mcpwm stuff
 #include "soc/mcpwm_struct.h"
@@ -265,6 +266,9 @@ static void IRAM_ATTR mcpwmIsrHandler(void* arg) {
       gateLoad(1, 1, RAILCOM_GATE_NEVER, RAILCOM_GATE_NEVER);
 #endif
 #endif
+#ifdef RAILCOM_UART
+      RailcomUart::cutoutStarted();  // empty the UARTs before the windows
+#endif
       cutoutFlag++;
     } else if (cutoutFlag == 1) { // the else is important
 #ifdef MCPWM_DEBUG
@@ -272,6 +276,9 @@ static void IRAM_ATTR mcpwmIsrHandler(void* arg) {
 #endif
       // Cutout is done
       Railcom::incCutout();
+#ifdef RAILCOM_UART
+      RailcomUart::capture();  // both windows have closed: read the UARTs
+#endif
       cutoutFlag++;
       // this does not work as the enable does not go into effect immidiately
       // MCPWM1.int_ena.timer0_tez_int_ena = 0;              // Disable interrupt on TEZ
@@ -481,13 +488,16 @@ RMTChannel::RMTChannel(pinpair pins, bool isMain) {
 #endif
   }
 #endif
+#ifdef RAILCOM_UART
+  if (isMain) RailcomUart::begin();  // before the interrupt that reads the UARTs
+#endif
   ESP_ERROR_CHECK(mcpwm_isr_register(
 		    MCPWM_UNIT_1, mcpwmIsrHandler, NULL,
 		    ESP_INTR_FLAG_LOWMED|
 		    ESP_INTR_FLAG_SHARED,
 		    /*ESP_INTR_FLAG_IRAM,*/
 		    NULL)); //Set ISR Handler
-  MCPWM1.int_clr.timer0_tez_int_clr = 1;              // Clear the interrupt flag 
+  MCPWM1.int_clr.timer0_tez_int_clr = 1;              // Clear the interrupt flag
   MCPWM1.int_ena.timer0_tez_int_ena = 1;              // Enable interrupt on TEZ
 
 }
@@ -532,6 +542,9 @@ int RMTChannel::RMTfillData(const byte buffer[], byte byteCount, byte repeatCoun
   setEOT(data + bitcounter-1);     // overwrite previous zero bit with EOT marker
   dataLen = bitcounter;
   noInterrupts();                      // keep dataReady and dataRepeat consistnet to each other
+#ifdef RAILCOM_UART
+  if (channel == 0) RailcomUart::notePending(buffer, byteCount); // MAIN
+#endif
   dataReady = true;
   dataRepeat = repeatCount+1;         // repeatCount of 0 means send once
   interrupts();
@@ -542,6 +555,10 @@ void IRAM_ATTR RMTChannel::RMTinterrupt() {
   //no rmt_tx_start(channel,true) as we run in loop mode
   //preamble is always loaded at beginning of buffer
   packetCounter++;
+#ifdef RAILCOM_UART
+  // MAIN only: the packet that just ended is paired with its cutout
+  if (channel == 0) RailcomUart::packetEnded(!dataReady && dataRepeat == 0, dataReady);
+#endif
   if (!dataReady && dataRepeat == 0) { // we did run empty
     rmt_fill_tx_items(channel, idle, idleLen, preambleLen-1);
     return; // nothing to do about that

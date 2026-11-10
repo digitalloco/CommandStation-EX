@@ -173,6 +173,21 @@ ZZ(J,T) // Get turnout list
         REPLY("<jT")
         for ( auto t=Turnout::first(); t; t=t->next()) if (!t->isHidden())  REPLY(" %d",t->getId()) 
         REPLY(">\n");
+#ifdef RAILCOM_UART
+// RailCom raw reader, see RailcomUart.h. Command names are provisional:
+// not yet agreed with DCC-EX. Each record is <jRC seq pkt ch1 ch2 flags>
+// in hex, '-' for none; the trailer is <jRC* first last empty dropped>.
+ZZ(J,RC) // RailCom raw reader: trailer only
+        RailcomUart::poll(stream, 0, 0, false);
+ZZ(J,RC,n) // RailCom raw records from cutout n (n modulo 32768), up to about 3000 bytes, then the trailer
+        RailcomUart::poll(stream, n, 0, true);
+ZZ(J,RC,n,a) // As above, only records whose packet was to address a
+        RailcomUart::poll(stream, n, a, true);
+ZZ(C,RC,EMPTY,ON) // Include cutouts with no bytes in RailCom raw replies
+        RailcomUart::sendEmpty = true;
+ZZ(C,RC,EMPTY,OFF) // Leave them out (the default)
+        RailcomUart::sendEmpty = false;
+#endif
 ZZ(J,T,id) // Get turnout state and description
         auto t=Turnout::get(id);
         if (!t || t->isHidden()) { REPLY("<jT %d X>\n",id) return true; }
