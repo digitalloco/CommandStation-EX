@@ -45,6 +45,19 @@
 
 #define CPU_TYPE_ERROR
 
+#if (defined(RAILCOM_GATE_CH1) || defined(RAILCOM_GATE_CH2)) && !defined(ARDUINO_ARCH_ESP32)
+  #error RAILCOM_GATE_CH1 and RAILCOM_GATE_CH2 need an ESP32: the gates come from its cutout timer
+#endif
+// A gate needs an output-capable GPIO: 0 to 33, less 20, 24 and 28 to 31,
+// which do not exist on the ESP32. 34 to 39 are input only.
+#define RAILCOM_GATE_PIN_OK(p) ((p) >= 0 && (p) <= 33 && (p) != 20 && (p) != 24 && ((p) < 28 || (p) > 31))
+#if defined(RAILCOM_GATE_CH1) && !RAILCOM_GATE_PIN_OK(RAILCOM_GATE_CH1)
+  #error RAILCOM_GATE_CH1 is not an output-capable ESP32 GPIO
+#endif
+#if defined(RAILCOM_GATE_CH2) && !RAILCOM_GATE_PIN_OK(RAILCOM_GATE_CH2)
+  #error RAILCOM_GATE_CH2 is not an output-capable ESP32 GPIO
+#endif
+
 #if defined(ARDUINO_ARCH_ESP32)
   #undef CPU_TYPE_ERROR
   #define ARDUINO_TYPE "ESP32"

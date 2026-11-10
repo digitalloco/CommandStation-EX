@@ -43,6 +43,7 @@ DCCWaveform::DCCWaveform(byte preambleBits, bool isMain) {
   requiredPreambles = preambleBits;
 }
 void DCCWaveform::begin() {
+  bool railcomOnMain = false;
   for(const auto& md: TrackManager::getMainDrivers()) {
     pinpair p = md->getSignalPin();
     if(rmtMainChannel) {
@@ -56,8 +57,10 @@ void DCCWaveform::begin() {
     TRACK_MODE m = md->getMode();
     if (m & TRACK_MODIFIER_RAILCOM) {
       rmtMainChannel->addRCPin(md->getBrakePinSigned());
+      railcomOnMain = true;
     }
   }
+  RMTChannel::railcomOnMain = railcomOnMain; // see DCCRMT.h
   MotorDriver *md = TrackManager::getProgDriver();
   if (md) {
     pinpair p = md->getSignalPin();

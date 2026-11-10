@@ -272,6 +272,17 @@ The configuration file for DCC-EX Command Station
 // GPIO 32 is Booster Input on EX-CSB1
 //#define BOOSTER_INPUT 32
 
+// On ESP32 you can have a gate output for each RailCom channel, open
+// while that channel's window is in progress during the cutout, for an
+// external RailCom receiver that needs it. The define is the GPIO.
+// Channel 1 is open 40-185 us and Channel 2 185-470 us after the end
+// bit. Either may be used alone. Gates are high while open unless
+// RAILCOM_GATE_ACTIVE_LOW is defined. On EX-CSB1, GPIO 17 and 18 are
+// A5 and A4; the CSB1-4Tracks build uses them as fault inputs.
+//#define RAILCOM_GATE_CH1 17
+//#define RAILCOM_GATE_CH2 18
+//#define RAILCOM_GATE_ACTIVE_LOW
+
 // ESP32 LED Wifi Indicator
 // GPIO 2 on ESPduino32
 //#define WIFI_LED 2

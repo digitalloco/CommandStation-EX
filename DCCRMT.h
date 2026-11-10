@@ -36,6 +36,12 @@ class RMTChannel {
   bool addPin(byte pin, bool inverted=0);
   bool addPin(pinpair pins);
   bool addRCPin(int16_t brakePin); // signed (inverted or not)
+  // True while a MAIN track has the RailCom modifier, so that its brake
+  // pin carries the cutout. Set by DCCWaveform::begin(), which runs again
+  // on every track mode change. DCCWaveform::isRailcom() cannot be used
+  // for this: on ESP32 it is always true, while the rail is only cut out
+  // on a track whose mode includes RAILCOM.
+  static volatile bool railcomOnMain;
   void IRAM_ATTR RMTinterrupt();
   void RMTprefill();
   //int RMTfillData(dccPacket packet);

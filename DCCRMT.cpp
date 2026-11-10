@@ -125,6 +125,7 @@ static void IRAM_ATTR __digitalWrite(uint8_t pin, uint8_t val) {
 // which of the channels was triggering the ISR as there
 // is only ONE common ISR routine for all channels.
 RMTChannel *channelHandle[8] = { 0 };
+volatile bool RMTChannel::railcomOnMain = false;
 
 // When cutoutFlag == 0 then it is the first
 // interrupt and we do the cutout
@@ -137,6 +138,49 @@ static volatile uint8_t cutoutFlag = 0;
 // the arming has to fit into.
 static uint32_t cutoutCompare = 0;
 static uint32_t cutoutPhase = 0;
+
+#if defined(RAILCOM_GATE_CH1) || defined(RAILCOM_GATE_CH2)
+// Optional RailCom gate outputs, one GPIO per channel, for a RailCom
+// receiver outside the ESP32 that needs to know when each channel's
+// window is open, for example to steer the detector's serial line into
+// a UART only while that channel can carry data. Each gate is a pulse
+// from an operator of MCPWM unit 1 counting on timer 0, the timer that
+// makes the cutout, so it shares the cutout's time base and sync.
+//
+// Window times are from the edge of the end bit that syncs the cutout
+// timer, as the cutout's own times are. Timer zero, the cutout start,
+// comes counts - cutoutPhase after that edge (28 us as the driver sets
+// it). The windows sit inside RCN-217's channel limits with some margin
+// for the decoder's own timing: Channel 1 from 40 us to 185 us, Channel
+// 2 from 185 us to 470 us; the cutout itself ends at 486 us. The
+// proof-of-concept version, with the zero taken as 27 us, measured
+// 40.8-185.8 us and 185.8-470.8 us on an EX-CSB1.
+#define RAILCOM_GATE_CH1_OPEN_US   40
+#define RAILCOM_GATE_CH1_CLOSE_US 185
+#define RAILCOM_GATE_CH2_OPEN_US  185
+#define RAILCOM_GATE_CH2_CLOSE_US 470
+// A compare value the timer never reaches, as its peak is the cutout
+// period (about 486 counts). A gate loaded with it stays closed.
+#define RAILCOM_GATE_NEVER 0xFFFF
+// Compare values in timer counts, worked out in mcpwmPulseOn() from the
+// period the driver chose, so they do not assume a 1 us count.
+#ifdef RAILCOM_GATE_CH1
+static uint32_t gateCh1Open = RAILCOM_GATE_NEVER, gateCh1Close = RAILCOM_GATE_NEVER;
+#endif
+#ifdef RAILCOM_GATE_CH2
+static uint32_t gateCh2Open = RAILCOM_GATE_NEVER, gateCh2Close = RAILCOM_GATE_NEVER;
+#endif
+
+// Loads both compares of operator op, A opening the gate and B closing
+// it. upmethod 4 takes the values at the next sync, the one that starts
+// the cutout; upmethod 1 takes them at the next timer zero.
+static inline void IRAM_ATTR gateLoad(int op, uint32_t upmethod, uint32_t open, uint32_t close) {
+  MCPWM1.operators[op].gen_stmp_cfg.gen_a_upmethod = upmethod;
+  MCPWM1.operators[op].gen_stmp_cfg.gen_b_upmethod = upmethod;
+  MCPWM1.operators[op].timestamp[0].gen = open;
+  MCPWM1.operators[op].timestamp[1].gen = close;
+}
+#endif
 
 // define time values for cutout
 #define CUTOUT_TOTAL                486  // usec
@@ -175,6 +219,19 @@ void IRAM_ATTR interrupt(rmt_channel_t channel, void *t) {
     MCPWM1.timer[0].timer_sync.timer_phase = cutoutPhase;
     MCPWM1.timer[0].timer_sync.timer_phase_direction = 0;
     MCPWM1.timer[0].timer_sync.timer_synci_en = 1;
+#if defined(RAILCOM_GATE_CH1) || defined(RAILCOM_GATE_CH2)
+    // Arm the gates for the cutout that follows, at the same sync. With
+    // RailCom off there is nothing to read, and the detector would see the
+    // driven track, so the gates stay closed.
+    if (RMTChannel::railcomOnMain) {
+#ifdef RAILCOM_GATE_CH1
+      gateLoad(2, 4, gateCh1Open, gateCh1Close);
+#endif
+#ifdef RAILCOM_GATE_CH2
+      gateLoad(1, 4, gateCh2Open, gateCh2Close);
+#endif
+    }
+#endif
   }
   // Last, as filling the packet takes time and the cutout must be armed
   RMTChannel *tt = channelHandle[channel];
@@ -197,6 +254,17 @@ static void IRAM_ATTR mcpwmIsrHandler(void* arg) {
       MCPWM1.operators[0].gen_stmp_cfg.gen_a_upmethod = 3; // bits 1 and 2: on timer zero and period
       MCPWM1.operators[0].timestamp[0].val = 0;
       MCPWM1.timer[0].timer_sync.timer_synci_en = 0;
+#if defined(RAILCOM_GATE_CH1) || defined(RAILCOM_GATE_CH2)
+      // Disarm the gates from the next timer zero, the end of the cutout,
+      // so that this cutout's windows run to their end and no later
+      // period opens them again.
+#ifdef RAILCOM_GATE_CH1
+      gateLoad(2, 1, RAILCOM_GATE_NEVER, RAILCOM_GATE_NEVER);
+#endif
+#ifdef RAILCOM_GATE_CH2
+      gateLoad(1, 1, RAILCOM_GATE_NEVER, RAILCOM_GATE_NEVER);
+#endif
+#endif
       cutoutFlag++;
     } else if (cutoutFlag == 1) { // the else is important
 #ifdef MCPWM_DEBUG
@@ -258,6 +326,50 @@ static void IRAM_ATTR mcpwmPulseOn() {
   // https://docs.espressif.com/projects/rust/esp-hal/1.0.0-beta.0/esp32/src/esp_hal/soc/esp32/psram.rs.html
   gpio_matrix_out(30 /*unused-silicon*/, RMT_SIG_OUT0_IDX, false, false);
   gpio_matrix_in (30 /*unused-silicon*/, PWM1_SYNC0_IN_IDX, false);
+
+#if defined(RAILCOM_GATE_CH1) || defined(RAILCOM_GATE_CH2)
+  // Gate set-up. Microseconds after the sync edge become timer counts
+  // after timer zero: the driver set the period register to counts per
+  // cutout period less one, the period is CUTOUT_TOTAL us, and the sync
+  // loads the timer with cutoutPhase, so zero is counts - cutoutPhase
+  // counts after the edge. Rounded to the nearest count.
+  const uint32_t counts = MCPWM1.timer[0].timer_cfg0.timer_period + 1;
+  const uint32_t zero = counts - cutoutPhase;
+  auto toCounts = [counts, zero](uint32_t us) -> uint32_t {
+    return (us * counts + CUTOUT_TOTAL / 2) / CUTOUT_TOTAL - zero;
+  };
+  // Each operator's compares start at RAILCOM_GATE_NEVER before its
+  // actions are set, so the reset value 0 never makes a pulse. Then the
+  // generator goes high at compare A and low at compare B, and the GPIO
+  // matrix inverts it if the receiver wants the gate low while open.
+#ifdef RAILCOM_GATE_ACTIVE_LOW
+  const bool gateInvert = true;
+#else
+  const bool gateInvert = false;
+#endif
+#ifdef RAILCOM_GATE_CH1
+  gateCh1Open = toCounts(RAILCOM_GATE_CH1_OPEN_US);
+  gateCh1Close = toCounts(RAILCOM_GATE_CH1_CLOSE_US);
+  gateLoad(2, 0, RAILCOM_GATE_NEVER, RAILCOM_GATE_NEVER); // 0: immediate
+  MCPWM1.operator_timersel.operator2_timersel = 0;       // count on timer 0
+  MCPWM1.operators[2].generator[0].gen_utea = 2;          // high at compare A
+  MCPWM1.operators[2].generator[0].gen_uteb = 1;          // low at compare B
+  PIN_FUNC_SELECT(GPIO_PIN_MUX_REG[RAILCOM_GATE_CH1], PIN_FUNC_GPIO);
+  gpio_set_direction((gpio_num_t)RAILCOM_GATE_CH1, GPIO_MODE_OUTPUT);
+  gpio_matrix_out(RAILCOM_GATE_CH1, PWM1_OUT2A_IDX, gateInvert, false);
+#endif
+#ifdef RAILCOM_GATE_CH2
+  gateCh2Open = toCounts(RAILCOM_GATE_CH2_OPEN_US);
+  gateCh2Close = toCounts(RAILCOM_GATE_CH2_CLOSE_US);
+  gateLoad(1, 0, RAILCOM_GATE_NEVER, RAILCOM_GATE_NEVER);
+  MCPWM1.operator_timersel.operator1_timersel = 0;
+  MCPWM1.operators[1].generator[0].gen_utea = 2;
+  MCPWM1.operators[1].generator[0].gen_uteb = 1;
+  PIN_FUNC_SELECT(GPIO_PIN_MUX_REG[RAILCOM_GATE_CH2], PIN_FUNC_GPIO);
+  gpio_set_direction((gpio_num_t)RAILCOM_GATE_CH2, GPIO_MODE_OUTPUT);
+  gpio_matrix_out(RAILCOM_GATE_CH2, PWM1_OUT1A_IDX, gateInvert, false);
+#endif
+#endif
 }
 
 
@@ -352,6 +464,23 @@ RMTChannel::RMTChannel(pinpair pins, bool isMain) {
   dataReady = false;
   // test with mcpwm
   mcpwmPulseOn();
+#if defined(RAILCOM_GATE_CH1) || defined(RAILCOM_GATE_CH2)
+  if (isMain) {
+#ifdef RAILCOM_GATE_ACTIVE_LOW
+    const char *gatePolarity = "low";
+#else
+    const char *gatePolarity = "high";
+#endif
+#ifdef RAILCOM_GATE_CH1
+    DIAG(F("RailCom Channel 1 gate on GPIO %d, active %s, counts %d-%d"),
+         RAILCOM_GATE_CH1, gatePolarity, (int)gateCh1Open, (int)gateCh1Close);
+#endif
+#ifdef RAILCOM_GATE_CH2
+    DIAG(F("RailCom Channel 2 gate on GPIO %d, active %s, counts %d-%d"),
+         RAILCOM_GATE_CH2, gatePolarity, (int)gateCh2Open, (int)gateCh2Close);
+#endif
+  }
+#endif
   ESP_ERROR_CHECK(mcpwm_isr_register(
 		    MCPWM_UNIT_1, mcpwmIsrHandler, NULL,
 		    ESP_INTR_FLAG_LOWMED|
